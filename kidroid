@@ -9,7 +9,7 @@
 # kidroid
 #
 ####################################################################################################
-VERSION=0.1
+VERSION=0.2
 
 set -e -u -C
 set -o pipefail
@@ -92,11 +92,11 @@ GENERATE_DOC_ZIP=y
 
 GENERATE_GERBER=y
 GENERATE_DRILL=y
-GENERATE_DRILL_MAP=y
+GENERATE_DRILL_MAP=''
 
 GENERATE_DOC_SCHEMATICS=y
-GENERATE_DOC_LAYERS=y
-GENERATE_IBOM=y
+GENERATE_DOC_LAYERS=''
+GENERATE_IBOM=''
 
 PATTERN_DOC_DIR="{PD}{P}_rev{r}_Doc"
 PATTERN_FAB_DIR="{PD}{P}_rev{r}_Fab"
@@ -108,8 +108,8 @@ PATTERN_FAB_GERBER_FNAME="{P}_rev{r}_{i}.{x}"
 
 PATTERN_DRILL_DOC_FNAME="{P}_rev{r}_{t}.{x}"
 PATTERN_SCH_DOC_FNAME="{P}_rev{r}_{t}.{x}"
-PATTERN_LAYER_DOC_FNAME="{P}_rev{r}_{t}-{i}.{x}"
 PATTERN_IBOM_FNAME="{P}_rev{r}_{t}.{x}"
+PATTERN_LAYER_DOC_FNAME="{P}_rev{r}_{t}-{i}.{x}"
 
 
 
@@ -126,6 +126,30 @@ displayHelp()
 cat <<__EOF
 $PGM_NAME --help
 $PGM_NAME --version
+
+$PGM_NAME [--fab[=no]] [fab-zip[=no]] [doc[=no]] [doc-zip[=no]]
+        [--doc-sch[=no]] [--doc-drill-map[=no]] [--doc-layers[=no]]
+        [--doc-ibom[=no]]
+        [--var-revision <variable>]
+        [--pattern-fab-dir <dir_pattern>] [--pattern-fab-zip <file_pattern>]
+        [--pattern-fab-gerber <file_pattern>]
+        [--pattern-fab-drill <file_pattern>]
+        [--pattern-doc-dir <dir_pattern>] [--pattern-doc-zip <file_pattern>]
+        [--pattern-doc-sch <file_pattern>] [--pattern-doc-drill <file_pattern>]
+        [--pattern-doc-layers <file_pattern>]
+        [--pattern-doc-ibom <file_pattern>]
+        [{--prj-dir <directory>|--prj-file <file>}]
+
+If no --prj-dir or --prj-file is specified, project is looked for in current
+directory.
+
+patterns can contain the following placeholders:
+  {PD}: Project directory
+  {P}:  Project name
+  {r}:  Project revision
+  {t}:  Artefact type
+  {i}:  Artefact ID (actual meaning depends on artefact type, may be empty)
+  {x}:  Suitable etension for artefact
 __EOF
 }
 
@@ -139,6 +163,9 @@ __EOF
 #
 #===================================================================================================
 
+PRJ_DIR=''
+PRJ_FILE=''
+
 function main
 { $_FNPROLOG
 
@@ -150,10 +177,19 @@ function main
 }
 
 
+function yesnoOptArg
+{ $_FNPROLOG
+
+  case "${OPTARG:-}" in
+  n|no|N|NO) OPTARG='' ;;
+  *) OPTARG=y
+  esac
+}
+
 function processCmdLine
 { $_FNPROLOG
 
-  while cmdl_getOpt "" "help,version" ; do
+  while cmdl_getOpt "" "help,version,fab=,fab-zip=,doc=,doc-zip=,doc-sch=,doc-drill-map=,doc-layers=,doc-ibom=,pattern-doc-dir:,pattern-doc-zip:,pattern-fab-dir:,pattern-fab-zip:,pattern-fab-gerber:,pattern-fab-drill:,pattern-doc-sch:,pattern-doc-drill:,pattern-doc-layers:,pattern-doc-ibom:,prj-dir:,prj-file:,var-revision:" ; do
     case "${OPT-}" in
     --version)
       printf '%s version %s\n' "$PGM_NAME" "$VERSION" ; doExit 0
@@ -161,8 +197,39 @@ function processCmdLine
     --help)
       displayHelp ; doExit 0
       ;;
+
+    --fab)           yesnoOptArg && GENERATE_FAB="$OPTARG" ;;
+    --fab-zip)       yesnoOptArg && GENERATE_FAB_ZIP="$OPTARG" ;;
+    --doc)           yesnoOptArg && GENERATE_DOC="$OPTARG" ;;
+    --doc-zip)       yesnoOptArg && GENERATE_DOC_ZIP="$OPTARG" ;;
+    --doc-sch)       yesnoOptArg && GENERATE_DOC_SCHEMATICS="$OPTARG" ;;
+    --doc-drill-map) yesnoOptArg && GENERATE_DRILL_MAP="$OPTARG" ;;
+    --doc-layers)    yesnoOptArg && GENERATE_DOC_LAYERS="$OPTARG" ;;
+    --doc-ibom)      yesnoOptArg && GENERATE_IBOM="$OPTARG" ;;
+
+    --pattern-doc-dir) PATTERN_DOC_DIR="$OPTARG" ;;
+    --pattern-doc-zip) PATTERN_DOC_ZIP="$OPTARG" ;;
+    --pattern-fab-dir) PATTERN_FAB_DIR="$OPTARG" ;;
+    --pattern-fab-zip) PATTERN_FAB_ZIP="$OPTARG" ;;
+
+    --pattern-fab-gerber) PATTERN_FAB_GERBER_FNAME="$OPTARG" ;;
+    --pattern-fab-drill)  PATTERN_FAB_DRILL_FNAME="$OPTARG" ;;
+
+    --pattern-doc-sch)    PATTERN_SCH_DOC_FNAME="$OPTARG" ;;
+    --pattern-doc-drill)  PATTERN_DRILL_DOC_FNAME="$OPTARG" ;;
+    --pattern-doc-layers) PATTERN_LAYER_DOC_FNAME="$OPTARG" ;;
+    --pattern-doc-ibom)   PATTERN_IBOM_FNAME="$OPTARG" ;;
+
+    --prj-dir) PRJ_DIR="$OPTARG" ;;
+    --prj-file) PRJ_FILE="$OPTARG" ;;
+
+    --var-revision) TEXT_VAR_REVISION="$OPTARG" ;;
     esac
   done
+
+  if [[ -n "$PRJ_DIR" && -n "$PRJ_FILE" ]] ; then
+    cmdl_error "Cannot use both --prj-dir and --prj-file"
+  fi
 
   cmdl_dieIfErrors
 }
@@ -171,6 +238,7 @@ function processCmdLine
 function generateOutputs
 { $_FNPROLOG
 
+  mainStep "Prepare outputs"
   determineOutputs
   initializeOutputs
 
@@ -412,8 +480,14 @@ function findAndLoadProject
 { $_FNPROLOG
   mainStep "Load project"
 
-  findProjectInDir "$( /bin/pwd )"
-  loadProject "$PROJECT_FILE"
+  if [[ -z "$PRJ_FILE" ]] ; then
+    if [[ -z "$PRJ_DIR" ]] ; then
+      PRJ_DIR="$( /bin/pwd )"
+    fi
+    findProjectInDir "$PRJ_DIR"
+  fi
+
+  loadProject "$PRJ_FILE"
 
   displayProjectSummary
 }
@@ -421,13 +495,12 @@ function findAndLoadProject
 
 function findProjectInDir
 { $_FNPROLOG
-  PROJECT_DIR="$1"
+  typeset dir="$1"
 
-  PROJECT_FILE="$( ls -d "$PROJECT_DIR/"*"$KICAD_PRO_EXT" 2> /dev/null )"
+  PRJ_FILE="$( ls -d "$dir/"*"$KICAD_PRO_EXT" 2> /dev/null || true )"
 
-  if [[ "$( printf "%s\n" "$PROJECT_FILE" | grep . | awk 'END{print NR}' )" != 1 ]] ; then
-    printf "FATAL: cannot identify single project file in project directory" 1>&2
-    exit 1
+  if [[ "$( printf "%s\n" "$PRJ_FILE" | grep . | awk 'END{print NR}' )" != 1 ]] ; then
+    fatal "cannot identify single project file in project directory"
   fi
 }
 
@@ -446,6 +519,10 @@ function loadProject
 function determineProjectPaths
 { $_FNPROLOG
   PROJECT_FILE="$1"
+
+  if [[ ! -f "$PROJECT_FILE" ]] ; then
+    fatal "Cannot find project file \"$PROJECT_FILE\""
+  fi
 
   PROJECT_DIR="$( dirname "$PROJECT_FILE" )/"
   PROJECT_FILE_NAME="$( basename "$PROJECT_FILE" )"
