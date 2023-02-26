@@ -1,0 +1,100 @@
+#!/usr/bin/awk -f
+
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
+
+BEGIN{
+  instr=0;
+  lvl=0;
+  linePrefix="";
+  startOfLine=1;
+  ORS="";
+}
+
+function out(str)
+{
+  if(startOfLine) {
+    # Trim leading spaces
+    sub("^[[:blank:]]*", "", str);
+  }
+
+  if(length(str)>0) {
+    if(startOfLine) {
+      print linePrefix;
+      startOfLine=0;
+    }
+    print str;
+  }
+}
+
+function finish_line()
+{
+  if(!startOfLine) {
+    printf "\n";
+  } 
+
+  startOfLine=1;
+}
+
+
+function handle_open_paren()
+{
+  ++lvl;
+  linePrefix = linePrefix " ";
+}
+
+function handle_close_paren()
+{
+  --lvl;
+  linePrefix=substr(linePrefix,1,lvl);
+}
+
+
+{
+  line=$0;
+
+  while(length(line)>0) {
+    if(instr) {
+      pos=match(line, "[\"\\\\]");
+    } else {
+      pos=match(line, "[\"()]");
+    }
+
+    if(pos==0) {
+      out(line);
+      break;
+    }
+
+    if(pos>1) {
+      out(substr(line, 1, pos-1));
+    }
+   
+    c=substr(line, pos, 1);
+    line=substr(line, pos+1);
+
+    if(!instr) {
+      if(c == "\"") { instr=1; }
+      else if( c=="(") {
+        finish_line();
+        handle_open_paren();
+      } else if (c==")") {
+        finish_line();
+        out(")");
+        finish_line();
+        handle_close_paren();
+        c="";
+      } 
+    } else {
+      if(c=="\"") instr=0;
+      else if (c=="\\") {
+        # TODO: should handle escape sequences within strings
+      }
+    }
+
+    out(c);
+  }
+
+  finish_line();
+}

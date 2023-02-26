@@ -1,0 +1,700 @@
+#!/bin/zsh
+#
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+#
+####################################################################################################
+#
+# kidroid
+#
+####################################################################################################
+VERSION=0.1
+
+set -e -u -C
+set -o pipefail
+
+
+
+
+
+#===================================================================================================
+#
+# Constants
+#
+#===================================================================================================
+
+PGM_BASEDIR="$( cd "$( dirname "$0" )" && /bin/pwd )"
+readonly PGM_BASEDIR
+readonly LIBDIR="$PGM_BASEDIR/lib"
+PGM_PATH="$PGM_BASEDIR/$( basename "$0" )"
+# shellcheck disable=SC2034
+readonly PGM_PATH
+readonly PGM_NAME="kidroid"
+
+# shellcheck disable=SC2034
+readonly TAB=$'\t'
+readonly _FNPROLOG=""
+
+
+
+#---------------------------------------------------------------------------------------------------
+#
+# Parameterization
+#
+#---------------------------------------------------------------------------------------------------
+readonly KICAD_ROOT="/Applications/KiCad/KiCad.app/"
+readonly KICAD_CLI="$KICAD_ROOT/Contents/MacOS/kicad-cli"
+readonly KICAD_PYDIR="$KICAD_ROOT/Contents/Frameworks/Python.framework/Versions/Current/bin/"
+KICAD_PYTHON="$( cd "$KICAD_PYDIR" && /bin/pwd )/python3"
+readonly KICAD_PYTHON
+
+readonly PGM_IBOM="$PGM_BASEDIR/InteractiveHtmlBom/InteractiveHtmlBom/generate_interactive_bom.py"
+readonly PGM_SEXPR_FMT="$LIBDIR/formatSExpr"
+
+readonly KICAD_PRO_EXT=".kicad_pro"
+readonly KICAD_SCH_EXT=".kicad_sch"
+readonly KICAD_PCB_EXT=".kicad_pcb"
+
+
+
+
+
+#===================================================================================================
+#
+# Loading of modules
+#
+#===================================================================================================
+
+# shellcheck disable=SC1091
+. "$LIBDIR"/mod_basic.sh
+# shellcheck disable=SC1091
+. "$LIBDIR"/mod_cmdline.sh
+
+
+
+
+
+#===================================================================================================
+#
+# Configuration (defaults)
+#
+#===================================================================================================
+
+# These variables here are meant to be overrideable with command-line or configuration options
+
+TEXT_VAR_REVISION='revision'
+
+GENERATE_FAB=y
+GENERATE_DOC=y
+GENERATE_FAB_ZIP=y
+GENERATE_DOC_ZIP=y
+
+GENERATE_GERBER=y
+GENERATE_DRILL=y
+GENERATE_DRILL_MAP=y
+
+GENERATE_DOC_SCHEMATICS=y
+GENERATE_DOC_LAYERS=y
+GENERATE_IBOM=y
+
+PATTERN_DOC_DIR="{PD}{P}_rev{r}_Doc"
+PATTERN_FAB_DIR="{PD}{P}_rev{r}_Fab"
+PATTERN_DOC_ZIP="{PD}{P}_rev{r}_Doc.zip"
+PATTERN_FAB_ZIP="{PD}{P}_rev{r}_Fab.zip"
+
+PATTERN_FAB_DRILL_FNAME="{P}_rev{r}_{t}.{x}"
+PATTERN_FAB_GERBER_FNAME="{P}_rev{r}_{i}.{x}"
+
+PATTERN_DRILL_DOC_FNAME="{P}_rev{r}_{t}.{x}"
+PATTERN_SCH_DOC_FNAME="{P}_rev{r}_{t}.{x}"
+PATTERN_LAYER_DOC_FNAME="{P}_rev{r}_{t}-{i}.{x}"
+PATTERN_IBOM_FNAME="{P}_rev{r}_{t}.{x}"
+
+
+
+
+
+#==============================================================================
+#
+# Help
+#
+#==============================================================================
+
+displayHelp()
+{ $_FNPROLOG
+cat <<__EOF
+$PGM_NAME --help
+$PGM_NAME --version
+__EOF
+}
+
+
+
+
+
+#===================================================================================================
+#
+# Main
+#
+#===================================================================================================
+
+function main
+{ $_FNPROLOG
+
+  processCmdLine
+
+  findAndLoadProject
+
+  generateOutputs
+}
+
+
+function processCmdLine
+{ $_FNPROLOG
+
+  while cmdl_getOpt "" "help,version" ; do
+    case "${OPT-}" in
+    --version)
+      printf '%s version %s\n' "$PGM_NAME" "$VERSION" ; doExit 0
+      ;;
+    --help)
+      displayHelp ; doExit 0
+      ;;
+    esac
+  done
+
+  cmdl_dieIfErrors
+}
+
+
+function generateOutputs
+{ $_FNPROLOG
+
+  determineOutputs
+  initializeOutputs
+
+  if [[ -n "${GENERATE_FAB}" ]] ; then
+    generateFabArtefacts
+  fi
+  if [[ -n "${GENERATE_DOC}" ]] ; then
+    generateDocArtefacts
+  fi
+
+  createBundles
+}
+
+
+
+
+
+#===================================================================================================
+#
+# Global tools
+#
+#===================================================================================================
+
+FIRST_STEP=y
+
+function mainStep
+{ $_FNPROLOG
+  [[ -n "$FIRST_STEP" ]] || printf "\n\n"
+  FIRST_STEP=''
+  printf "%s\n" "$*" | sed 'h;s/./=/g;H;G'
+}
+
+
+function subStep
+{ $_FNPROLOG
+  printf "\n>> %s\n" "$*"
+}
+
+
+function details
+{ $_FNPROLOG
+  printf "+ %s\n" "$*"
+}
+
+
+
+
+
+#===================================================================================================
+#
+# Variables and substitutions
+#
+#===================================================================================================
+
+# We have a substitution mechanism in order to generate folder and file names based on configurable
+# patterns. Here are defined the variables that can be referenced in the patterns.
+
+unset PROJECT_DIR
+unset PROJECT_NAME
+
+unset PROJECT_FILE
+unset PROJECT_FILE_NAME
+unset PROJECT_FILE_NAME_NOEXT
+unset PROJECT_SCH_FILE
+unset PROJECT_PCB_FILE
+unset PROJECT_REVISION
+
+unset ARTEFACT_TYPE
+unset ARTEFACT_ID
+unset ARTEFACT_EXT
+
+unset RUN_DATE
+unset RUN_TIME
+
+unset OUTPUT_DOC_DIR
+unset OUTPUT_FAB_DIR
+unset OUTPUT_DOC_ZIP
+unset OUTPUT_FAB_ZIP
+
+
+
+function setArtefactContext
+{ $_FNPROLOG
+  typeset type="$1" id="$2" ext="$3"
+
+  ARTEFACT_TYPE="$type"
+  ARTEFACT_ID="$id"
+  ARTEFACT_EXT="$ext"
+}
+
+
+function cleanArtefactContext
+{ $_FNPROLOG
+  unset ARTEFACT_TYPE
+  unset ARTEFACT_ID
+  unset ARTEFACT_EXT
+}
+
+
+function substitute
+{ $_FNPROLOG
+  typeset pattern="$1"
+  typeset output=""
+  typeset pre code sub
+
+
+  while [[ "$pattern" != "" ]] ; do
+    # Stop at first of % or {
+    pre="${pattern%%%*}"
+    pre="${pre%%\{*}"
+    pattern="${pattern#"$pre"}"
+    code=""
+    sub=""
+
+    # %: kibot-style substitutinos
+    # unsupported/unimplemented:
+    # c) # company
+    # p) # pcb/sch title from pcb metadata
+    # Cn ) # comments line from pcb/sch
+    # d) # date from metadata or file date
+    # I) # user-defined ID for this output
+    # S) # sub-PCB name
+    # G) # name of global variant
+    # g) # file_id of global variant
+    # v) # file_id of current variant
+    # V) # name of current variant
+
+    case "$pattern" in
+    "%D"*) code="${pattern:0:2}"; sub="$RUN_DATE" ;;
+    "%f"*) code="${pattern:0:2}"; sub="$PROJECT_FILE_NAME_NOEXT" ;;
+    "%F"*) code="${pattern:0:2}"; sub="$PROJECT_DIR/$PROJECT_FILE_NAME_NOEXT" ;;
+    "%i"*) code="${pattern:0:2}"; sub="$ARTEFACT_ID" ;;
+    "%r"*) code="${pattern:0:2}"; sub="$PROJECT_REVISION" ;;
+    "%T"*) code="${pattern:0:2}"; sub="$RUN_TIME" ;;
+    "%x"*) code="${pattern:0:2}"; sub="$ARTEFACT_EXT" ;;
+    "%%"*) code="${pattern:0:2}"; sub="%" ;;
+    "%{"*) code="${pattern:0:2}"; sub="{" ;;
+
+    "%"*) # Default (invalid) stuff :
+        code="%" ; sub="%" ;;
+
+    "{"*) # kidroid-style substitutions
+        code="${pattern%%\}*}}" ; 
+        case "$code" in
+        "{PD}") sub="$PROJECT_DIR" ;;
+        "{P}") sub="$PROJECT_NAME" ;;
+        "{r}") sub="$PROJECT_REVISION" ;;
+        "{t}") sub="$ARTEFACT_TYPE" ;;
+        "{i}") sub="$ARTEFACT_ID" ;;
+        "{x}") sub="$ARTEFACT_EXT" ;;
+        esac
+        ;;
+    esac
+
+    output="$output$pre$sub"
+    pattern="${pattern#"$code"}"
+  done
+
+  output="$output$pattern"
+  RET_VAL="$output"
+}
+
+
+
+
+
+#===================================================================================================
+#
+# Global output management
+#
+#===================================================================================================
+
+function determineOutputs
+{ $_FNPROLOG
+  if [[ -n "${GENERATE_DOC}" ]] ; then
+    substitute "$PATTERN_DOC_DIR" && OUTPUT_DOC_DIR="$RET_VAL/"
+    substitute "$PATTERN_DOC_ZIP" && OUTPUT_DOC_ZIP="$RET_VAL"
+  fi
+
+  if [[ -n "${GENERATE_FAB}" ]] ; then
+    substitute "$PATTERN_FAB_DIR" && OUTPUT_FAB_DIR="$RET_VAL/"
+    substitute "$PATTERN_FAB_ZIP" && OUTPUT_FAB_ZIP="$RET_VAL"
+  fi
+}
+
+
+function initializeOutputs
+{ $_FNPROLOG
+  if [[ -n "${GENERATE_FAB}" ]] ; then
+    mkdir "$OUTPUT_FAB_DIR"
+  fi
+  if [[ -n "${GENERATE_DOC}" ]] ; then
+    mkdir "$OUTPUT_DOC_DIR"
+  fi
+}
+
+
+function createBundles
+{ $_FNPROLOG
+  typeset fab='' doc=''
+
+  if [[ -n "${GENERATE_FAB}" && -n "${GENERATE_FAB_ZIP}" ]] ; then
+    fab=y
+  fi
+  if [[ -n "${GENERATE_DOC}" && -n "${GENERATE_DOC_ZIP}" ]] ; then
+    doc=y
+  fi
+
+  if [[ -z "$fab$doc" ]] ; then
+    return 0
+  fi
+
+  mainStep "Create output bundles"
+
+  if [[ -n "$fab" ]] ; then
+    subStep "Fabrication bundle"
+    cd "$OUTPUT_FAB_DIR" && zip -q "$OUTPUT_FAB_ZIP" ./*
+    details "$OUTPUT_FAB_ZIP"
+  fi
+
+  if [[ -n "$doc" ]] ; then
+    subStep "Documentation bundle"
+    cd "$OUTPUT_DOC_DIR" && zip -q "$OUTPUT_DOC_ZIP" ./*
+    details "$OUTPUT_DOC_ZIP"
+  fi
+}
+
+
+
+
+
+#===================================================================================================
+#
+# KiCad project parsing
+#
+#===================================================================================================
+
+function findAndLoadProject
+{ $_FNPROLOG
+  mainStep "Load project"
+
+  findProjectInDir "$( /bin/pwd )"
+  loadProject "$PROJECT_FILE"
+
+  displayProjectSummary
+}
+
+
+function findProjectInDir
+{ $_FNPROLOG
+  PROJECT_DIR="$1"
+
+  PROJECT_FILE="$( ls -d "$PROJECT_DIR/"*"$KICAD_PRO_EXT" 2> /dev/null )"
+
+  if [[ "$( printf "%s\n" "$PROJECT_FILE" | grep . | awk 'END{print NR}' )" != 1 ]] ; then
+    printf "FATAL: cannot identify single project file in project directory" 1>&2
+    exit 1
+  fi
+}
+
+
+function loadProject
+{ $_FNPROLOG
+  determineProjectPaths "$1"
+
+  readProjectTextVariable "$TEXT_VAR_REVISION" && PROJECT_REVISION="$RET_VAL"
+
+  readPCBConfig
+  determinePCBLayers
+}
+
+
+function determineProjectPaths
+{ $_FNPROLOG
+  PROJECT_FILE="$1"
+
+  PROJECT_DIR="$( dirname "$PROJECT_FILE" )/"
+  PROJECT_FILE_NAME="$( basename "$PROJECT_FILE" )"
+
+  PROJECT_FILE_NAME_NOEXT="${PROJECT_FILE_NAME%"$KICAD_PRO_EXT"}"
+  PROJECT_NAME="${PROJECT_FILE_NAME_NOEXT}"
+
+  PROJECT_SCH_FILE="${PROJECT_DIR}${PROJECT_FILE_NAME_NOEXT}$KICAD_SCH_EXT"
+  PROJECT_PCB_FILE="${PROJECT_DIR}${PROJECT_FILE_NAME_NOEXT}$KICAD_PCB_EXT"
+}
+
+
+function displayProjectSummary
+{ $_FNPROLOG
+cat <<__EOF
+Project Dir : $PROJECT_DIR
+Project File: $PROJECT_FILE
+Project Name: $PROJECT_NAME
+SCH file: $PROJECT_SCH_FILE
+PCB file: $PROJECT_PCB_FILE
+
+Revision: $PROJECT_REVISION
+PCB_ALL_LAYERS: $( printf "%s," "${PCB_ALL_LAYERS[@]}" | sed 's/,$//' )
+PCB_FAB_LAYERS: $( printf "%s," "${PCB_FAB_LAYERS[@]}" | sed 's/,$//' )
+__EOF
+}
+
+
+function readProjectTextVariable
+{ $_FNPROLOG
+  RET_VAL="$( jq -r ".text_variables.$1" "$PROJECT_FILE" )"
+}
+
+
+function readPCBConfig
+{ $_FNPROLOG
+
+  PCB_CFG="$( "$PGM_SEXPR_FMT" "$PROJECT_PCB_FILE" | selectSExpr 1 kicad_pcb )"
+}
+
+
+function determinePCBLayers
+{ $_FNPROLOG
+
+  PCB_ALL_LAYERS=( )
+  printf "%s\n" "$PCB_CFG" | selectSExpr 2 "layers" | selectSExpr 3 "" |
+                            fmtSExprAsOneLiners | getFirstString |
+  while IFS='' read -r line ; do PCB_ALL_LAYERS+=( "$line" ) ; done
+
+  PCB_STACKUP_LAYERS=() 
+  printf "%s\n" "$PCB_CFG" | selectSExpr 2 "setup" | selectSExpr 3 "stackup" | selectSExpr 4 "layer" |
+                             unselectSExpr 5 "" | fmtSExprAsOneLiners | getFirstString |
+  while IFS='' read -r line ; do PCB_STACKUP_LAYERS+=( "$line" ) ; done
+
+  PCB_FAB_LAYERS=()
+  for layer in "${PCB_ALL_LAYERS[@]}" ; do
+    case "$layer" in
+    *.Cu|*.SilkS|*.Mask|*.Adhesive|*.Paste|*.Cuts) PCB_FAB_LAYERS+=( "$layer" );;
+    esac
+  done
+}
+
+
+function selectSExpr
+{ $_FNPROLOG
+  typeset lvl="$1" key="$2"
+  typeset hdr=""
+
+  while ((lvl>0)) ; do
+    hdr="$hdr "
+    ((--lvl)) || true
+  done
+  
+  awk "/^$hdr\($key/,/^$hdr)/{print;}"
+}
+
+
+function unselectSExpr
+{ $_FNPROLOG
+  typeset lvl="$1" key="$2"
+  typeset hdr=""
+
+  while ((lvl>0)) ; do
+    hdr="$hdr "
+    ((--lvl)) || true
+  done
+
+  awk "/^$hdr\($key/,/^$hdr)/{next;}{print;}"
+}
+
+
+function fmtSExprAsOneLiners
+{ $_FNPROLOG
+  tr -d '\n' | tr ')' '\n'
+}
+
+
+function getFirstString
+{ $_FNPROLOG
+  sed 's/^[^"]*"//;s/".*//;'
+}
+
+
+
+
+
+#===================================================================================================
+#
+# Fabrication artefacts
+#
+#===================================================================================================
+
+function generateFabArtefacts
+{ $_FNPROLOG
+  if [[ -n "${GENERATE_FAB}" ]] ; then
+    mainStep "Generate fabrication artefacts"
+
+    if [[ -n "${GENERATE_GERBER}" ]] ; then
+      doGenerateGerbers
+    fi
+    if [[ -n "${GENERATE_DRILL}" ]] ; then
+      doGenerateDrill
+    fi
+  fi
+}
+
+
+function doGenerateGerbers
+{ $_FNPROLOG
+  typeset fname layer
+
+  for layer in "${PCB_FAB_LAYERS[@]}" ; do
+    setArtefactContext "gerber" "${layer//./-}" "gbr"
+    substitute "$PATTERN_FAB_GERBER_FNAME" && fname="$RET_VAL"
+    subStep "gerber $layer"
+    "$KICAD_CLI" pcb export gerber -l "$layer" -o "$OUTPUT_FAB_DIR/$fname" "$PROJECT_PCB_FILE"
+    details "Output: $fname"
+  done
+
+  cleanArtefactContext
+}
+
+
+function doGenerateDrill
+{ $_FNPROLOG
+  typeset fname
+
+  subStep "Generate drill file"
+  setArtefactContext "drill" "" "drl"
+  substitute "$PATTERN_FAB_DRILL_FNAME" && fname="$RET_VAL"
+
+  "$KICAD_CLI" pcb export drill --format "excellon" --units "mm" \
+    --generate-map --map-format "pdf" \
+    -o "$OUTPUT_FAB_DIR/" "$PROJECT_PCB_FILE"
+  mv "$OUTPUT_FAB_DIR/$PROJECT_NAME.drl" "$OUTPUT_FAB_DIR/$fname"
+  details "Output: $fname"
+
+  if [[ -n "${GENERATE_DOC}" && -n "${GENERATE_DRILL_MAP}" ]] ; then
+    setArtefactContext "drlmap" "" "pdf"
+    substitute "$PATTERN_DRILL_DOC_FNAME" && fname="$RET_VAL"
+    mv "$OUTPUT_FAB_DIR/"*drl_map.pdf "$OUTPUT_DOC_DIR/$fname"
+    details "Map: $fname"
+  else
+    rm "$OUTPUT_FAB_DIR/"*drl_map.pdf
+  fi
+
+  cleanArtefactContext
+}
+
+
+
+
+
+#===================================================================================================
+#
+# Documentation artefacts
+#
+#===================================================================================================
+
+function generateDocArtefacts
+{ $_FNPROLOG
+  if [[ -n "${GENERATE_DOC}" ]] ; then
+    mainStep "Generate documentation"
+
+    if [[ -n "${GENERATE_DOC_SCHEMATICS}" ]] ; then
+      doGenerateDocSch
+    fi
+    if [[ -n "${GENERATE_DOC_LAYERS}" ]] ; then
+      doGenerateDocLayers
+    fi
+    if [[ -n "${GENERATE_IBOM}" ]] ; then
+      doGenerateIBom
+    fi
+  fi
+}
+
+
+function doGenerateDocSch
+{ $_FNPROLOG
+  typeset fname
+
+  subStep "Generate schematics PDF"
+  setArtefactContext "schematics" "" "pdf"
+  substitute "$PATTERN_SCH_DOC_FNAME" && fname="$RET_VAL"
+  "$KICAD_CLI" sch export pdf -o "$OUTPUT_DOC_DIR/$fname" "$PROJECT_SCH_FILE"
+
+  cleanArtefactContext
+}
+
+
+function doGenerateDocLayers
+{ $_FNPROLOG
+  typeset fname
+
+  for layer in "${PCB_ALL_LAYERS[@]}" ; do
+    setArtefactContext "layer" "${layer//./-}" "pdf"
+    substitute "$PATTERN_LAYER_DOC_FNAME" && fname="$RET_VAL"
+    subStep "layer $layer"
+    "$KICAD_CLI" pcb export pdf -l "$layer" -o "$OUTPUT_DOC_DIR/$fname" "$PROJECT_PCB_FILE"
+    details "Output: $fname"
+  done
+
+  cleanArtefactContext
+}
+
+
+function doGenerateIBom
+{ $_FNPROLOG
+  typeset fname
+
+  subStep "Generate Interactive BOM"
+  setArtefactContext "ibom" "" "html"
+  substitute "$PATTERN_IBOM_FNAME" && fname="$RET_VAL"
+  "$KICAD_PYTHON" "$PGM_IBOM" --no-browser \
+    --dest-dir "$OUTPUT_DOC_DIR" --name-format "${fname%.html}" "$PROJECT_PCB_FILE"
+  details "Output: $fname"
+
+  cleanArtefactContext
+}
+
+
+
+
+
+#===================================================================================================
+#
+# Invocation
+#
+#===================================================================================================
+
+cmdl_init ${@+"${@}"}
+main
