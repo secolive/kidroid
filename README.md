@@ -77,6 +77,9 @@ The following switches are used to define _what_ to produce; adding `=no` to the
     --doc-drill-map   drill map; not applicable when the drill fabrication artefact is not generated.
     --doc-layers      PDF drawings of each layer for documentation purposes
     --doc-ibom        Interactive HTML Bom  
+    --doc-plot <plot_specification>  A PDF plot of one or more layers; multiple plots can be specified by repeating
+                                     the option. plot_specification looks as follows:
+                                     <name>:<layer>[,<layer>..]
 
 The fabrication and documentation artefacts can also be enabled/disabled globally as follows:
 
@@ -130,7 +133,8 @@ and possibly clean the directories from previous runs. Here's an example from my
     kidroid:
             rm -Rf *_rev*_Doc/ *_rev*_Fab/
             rm -f *_rev*_Doc.zip *_rev*_Fab.zip
-            ~/Documents/KiCad/Tools/kidroid/kidroid --doc-sch --doc-layers --doc-ibom --doc-drill-map
+            ~/Documents/KiCad/Tools/kidroid/kidroid --fab --doc-sch --doc-layers --doc-ibom --doc-drill-map \
+                    --doc-plot physical:Dwgs.User,Edge.Cuts,F.CrtYd,F.Mask
 
 
 FAQs
