@@ -108,10 +108,10 @@ PATTERN_FAB_ZIP="{PD}{P}_rev{r}_Fab.zip"
 PATTERN_FAB_DRILL_FNAME="{P}_rev{r}_{t}.{x}"
 PATTERN_FAB_GERBER_FNAME="{P}_rev{r}_{i}.{x}"
 
-PATTERN_DRILL_DOC_FNAME="{P}_rev{r}_{t}.{x}"
-PATTERN_SCH_DOC_FNAME="{P}_rev{r}_{t}.{x}"
-PATTERN_LAYER_DOC_FNAME="{P}_rev{r}_{t}-{i}.{x}"
+PATTERN_DOC_DRILL_FNAME="{P}_rev{r}_{t}.{x}"
+PATTERN_DOC_SCH_FNAME="{P}_rev{r}_{t}.{x}"
 PATTERN_IBOM_FNAME="{P}_rev{r}_{t}.{x}"
+PATTERN_DOC_LAYER_FNAME="{P}_rev{r}_{t}-{i}.{x}"
 PATTERN_DOC_PLOT_FNAME="{P}_rev{r}_{i}.{x}"
 
 
@@ -224,9 +224,9 @@ function processCmdLine
     --pattern-fab-gerber) PATTERN_FAB_GERBER_FNAME="$OPTARG" ;;
     --pattern-fab-drill)  PATTERN_FAB_DRILL_FNAME="$OPTARG" ;;
 
-    --pattern-doc-sch)    PATTERN_SCH_DOC_FNAME="$OPTARG" ;;
-    --pattern-doc-drill)  PATTERN_DRILL_DOC_FNAME="$OPTARG" ;;
-    --pattern-doc-layers) PATTERN_LAYER_DOC_FNAME="$OPTARG" ;;
+    --pattern-doc-sch)    PATTERN_DOC_SCH_FNAME="$OPTARG" ;;
+    --pattern-doc-drill)  PATTERN_DOC_DRILL_FNAME="$OPTARG" ;;
+    --pattern-doc-layers) PATTERN_DOC_LAYER_FNAME="$OPTARG" ;;
     --pattern-doc-ibom)   PATTERN_IBOM_FNAME="$OPTARG" ;;
 
     --prj-dir) PRJ_DIR="$OPTARG" ;;
@@ -693,7 +693,7 @@ function doGenerateDrill
 
   if [[ -n "${GENERATE_DOC}" && -n "${GENERATE_DRILL_MAP}" ]] ; then
     setArtefactContext "drlmap" "" "pdf"
-    substitute "$PATTERN_DRILL_DOC_FNAME" && fname="$RET_VAL"
+    substitute "$PATTERN_DOC_DRILL_FNAME" && fname="$RET_VAL"
     mv "$OUTPUT_FAB_DIR/"*drl_map.pdf "$OUTPUT_DOC_DIR/$fname"
     details "Map: $fname"
   else
@@ -740,7 +740,7 @@ function doGenerateDocSch
 
   subStep "Generate schematics PDF"
   setArtefactContext "schematics" "" "pdf"
-  substitute "$PATTERN_SCH_DOC_FNAME" && fname="$RET_VAL"
+  substitute "$PATTERN_DOC_SCH_FNAME" && fname="$RET_VAL"
   "$KICAD_CLI" sch export pdf -o "$OUTPUT_DOC_DIR/$fname" "$PROJECT_SCH_FILE"
 
   cleanArtefactContext
@@ -749,11 +749,11 @@ function doGenerateDocSch
 
 function doGenerateDocLayers
 { $_FNPROLOG
-  typeset fname
+  typeset fname layer
 
   for layer in "${PCB_ALL_LAYERS[@]}" ; do
     setArtefactContext "layer" "${layer//./-}" "pdf"
-    substitute "$PATTERN_LAYER_DOC_FNAME" && fname="$RET_VAL"
+    substitute "$PATTERN_DOC_LAYER_FNAME" && fname="$RET_VAL"
     subStep "layer $layer"
     "$KICAD_CLI" pcb export pdf -l "$layer" -o "$OUTPUT_DOC_DIR/$fname" "$PROJECT_PCB_FILE"
     details "Output: $fname"
