@@ -114,6 +114,8 @@ PATTERN_IBOM_FNAME="{P}_rev{r}_{t}.{x}"
 PATTERN_DOC_LAYER_FNAME="{P}_rev{r}_{t}-{i}.{x}"
 PATTERN_DOC_PLOT_FNAME="{P}_rev{r}_{i}.{x}"
 
+PCB_EXPORT_ARGS=( --ibt )
+
 
 
 
@@ -685,7 +687,7 @@ function doGenerateDrill
   setArtefactContext "drill" "" "drl"
   substitute "$PATTERN_FAB_DRILL_FNAME" && fname="$RET_VAL"
 
-  "$KICAD_CLI" pcb export drill --format "excellon" --units "mm" \
+  "$KICAD_CLI" pcb export drill --format "excellon" --excellon-units "mm" \
     --generate-map --map-format "pdf" \
     -o "$OUTPUT_FAB_DIR/" "$PROJECT_PCB_FILE"
   mv "$OUTPUT_FAB_DIR/$PROJECT_NAME.drl" "$OUTPUT_FAB_DIR/$fname"
@@ -755,7 +757,7 @@ function doGenerateDocLayers
     setArtefactContext "layer" "${layer//./-}" "pdf"
     substitute "$PATTERN_DOC_LAYER_FNAME" && fname="$RET_VAL"
     subStep "layer $layer"
-    "$KICAD_CLI" pcb export pdf -l "$layer" -o "$OUTPUT_DOC_DIR/$fname" "$PROJECT_PCB_FILE"
+    "$KICAD_CLI" pcb export pdf "${PCB_EXPORT_ARGS[@]}" -l "$layer" -o "$OUTPUT_DOC_DIR/$fname" "$PROJECT_PCB_FILE"
     details "Output: $fname"
   done
 
@@ -780,7 +782,7 @@ function doGenerateDocPlots
     setArtefactContext "plot" "$name" "pdf"
     substitute "$PATTERN_DOC_PLOT_FNAME" && fname="$RET_VAL"
     subStep "plot $name ($layers)"
-    "$KICAD_CLI" pcb export pdf -l "$layers" -o "$OUTPUT_DOC_DIR/$fname" "$PROJECT_PCB_FILE"
+    "$KICAD_CLI" pcb export pdf "${PCB_EXPORT_ARGS[@]}" -l "$layers" -o "$OUTPUT_DOC_DIR/$fname" "$PROJECT_PCB_FILE"
     details "Output: $fname"
   done
 
